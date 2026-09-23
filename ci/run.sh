@@ -473,18 +473,18 @@ sys.exit(0)
 PY
         rc=$?
         if [ $rc -eq 20 ]; then
-            printf '  - f16 cpu vs ngl99 (FAIL: empty generation)\n' | tee -a $OUT/${ci}-cpu-gpu-match.log
+            printf '  - f16 cpu vs ngl99 (FAIL: empty generation)\n'
             return 20
         fi
         if [ $rc -eq 22 ]; then
-            printf '  - f16 cpu vs ngl99 (FAIL: tokens differ)\n' | tee -a $OUT/${ci}-cpu-gpu-match.log
+            printf '  - f16 cpu vs ngl99 (FAIL: tokens differ)\n'
             return 22
         fi
         if [ $rc -ne 0 ]; then
-            printf '  - f16 cpu vs ngl99 (FAIL: check error)\n' | tee -a $OUT/${ci}-cpu-gpu-match.log
+            printf '  - f16 cpu vs ngl99 (FAIL: unknown error, check log)\n'
             return $rc
         fi
-        printf '  - f16 cpu vs ngl99 tokens OK\n' | tee -a $OUT/${ci}-cpu-gpu-match.log
+        printf '  - f16 cpu vs ngl99 tokens OK\n'
     fi
 
     (time ./bin/llama-perplexity --model ${model_f16}  -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-f16.log

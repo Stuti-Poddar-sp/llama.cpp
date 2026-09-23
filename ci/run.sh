@@ -439,6 +439,54 @@ function gg_run_qwen3_0_6b {
     (time ./bin/llama-completion -no-cnv --model ${model_q5_k} -ngl 99 -c 1024 -s 1234 -n 64 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q5_k.log
     (time ./bin/llama-completion -no-cnv --model ${model_q6_k} -ngl 99 -c 1024 -s 1234 -n 64 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q6_k.log
 
+    if [ ! -z ${GG_BUILD_CUDA} ]; then
+        cpu_log=$OUT/${ci}-tg-f16-cpu.log
+        gpu_log=$OUT/${ci}-tg-f16-gpu.log
+
+        (time ./bin/llama-completion -no-cnv --log-disable --device none --model ${model_f16} -ngl 0 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${cpu_log} 2>&1
+        (time ./bin/llama-completion -no-cnv --log-disable --model ${model_f16} -ngl 99 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${gpu_log} 2>&1
+
+        python3 - "$cpu_log" "$gpu_log" << 'PY'
+import re, sys
+skip = re.compile(
+    r"^(llama_|ggml|system_info|main:|real\t|user\t|sys\t|print_info|"
+    r"load_|common_|sampler|build:|\s*$)",
+    re.I,
+)
+
+def extract(path):
+    parts = []
+    with open(path, errors="replace") as f:
+        for line in f:
+            if skip.search(line):
+                continue
+            parts.append(line)
+    return "".join(parts).strip()
+
+cpu = extract(sys.argv[1])
+gpu = extract(sys.argv[2])
+if not cpu or not gpu:
+    sys.exit(20)
+if cpu != gpu:
+    sys.exit(22)
+sys.exit(0)
+PY
+        rc=$?
+        if [ $rc -eq 20 ]; then
+            printf '  - f16 cpu vs ngl99 (FAIL: empty generation)\n' | tee -a $OUT/${ci}-cpu-gpu-match.log
+            return 20
+        fi
+        if [ $rc -eq 22 ]; then
+            printf '  - f16 cpu vs ngl99 (FAIL: tokens differ)\n' | tee -a $OUT/${ci}-cpu-gpu-match.log
+            return 22
+        fi
+        if [ $rc -ne 0 ]; then
+            printf '  - f16 cpu vs ngl99 (FAIL: check error)\n' | tee -a $OUT/${ci}-cpu-gpu-match.log
+            return $rc
+        fi
+        printf '  - f16 cpu vs ngl99 tokens OK\n' | tee -a $OUT/${ci}-cpu-gpu-match.log
+    fi
+
     (time ./bin/llama-perplexity --model ${model_f16}  -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-f16.log
     if [ -z ${GG_BUILD_NO_BF16} ]; then
         (time ./bin/llama-perplexity --model ${model_bf16} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-bf16.log

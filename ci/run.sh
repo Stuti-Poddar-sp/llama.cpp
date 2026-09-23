@@ -58,8 +58,6 @@ if [ -n "${GG_BUILD_ROCM}" ] && [ -n "${GITHUB_RUN_ID}" ]; then
 fi
 
 rm -f $OUT/*.log
-rm -f $OUT/*.exit
-rm -f $OUT/*.md
 
 sd=`dirname $0`
 cd $sd/../
@@ -190,7 +188,7 @@ if [ ! -z ${GG_BUILD_OPENVINO} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
 
     # TODO: fix failing tests on OpenVINO backend
-    CTEST_EXTRA="-E test-llama-archs|^test-recurrent-state-|test-backend-ops|test-save-load-state"
+    CTEST_EXTRA="-E test-llama-archs|^test-recurrent-state-|test-save-load-state"
 fi
 
 ## helpers
@@ -211,10 +209,6 @@ function gg_wget {
     cd $cwd
 }
 
-function gg_printf {
-    printf -- "$@" >> $OUT/README.md
-}
-
 function gg_run {
     ci=$1
 
@@ -223,12 +217,9 @@ function gg_run {
 
     gg_run_$ci | tee $OUT/$ci.log
     cur=$?
-    echo "$cur" > $OUT/$ci.exit
 
     set +x
     set +o pipefail
-
-    gg_sum_$ci
 
     ret=$((ret | cur))
 }
@@ -250,20 +241,9 @@ function gg_run_ctest_debug {
     (cmake -G "${CMAKE_GENERATOR}" -DCMAKE_BUILD_TYPE=Debug ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time cmake --build . --config Debug -j$(nproc)) 2>&1 | tee -a $OUT/${ci}-make.log
 
-    (time ctest -C Debug --output-on-failure -L main -E "test-opt|test-backend-ops|test-llama-archs" ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
+    (time ctest -C Debug --output-on-failure -L main -E "test-opt|test-llama-archs" ${CTEST_EXTRA}) 2>&1 | tee -a $OUT/${ci}-ctest.log
 
     set +e
-}
-
-function gg_sum_ctest_debug {
-    gg_printf '### %s\n\n' "${ci}"
-
-    gg_printf 'Runs ctest in debug mode\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '```\n'
-    gg_printf '%s\n' "$(cat $OUT/${ci}-ctest.log)"
-    gg_printf '```\n'
-    gg_printf '\n'
 }
 
 # ctest_release
@@ -290,16 +270,6 @@ function gg_run_ctest_release {
     set +e
 }
 
-function gg_sum_ctest_release {
-    gg_printf '### %s\n\n' "${ci}"
-
-    gg_printf 'Runs ctest in release mode\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '```\n'
-    gg_printf '%s\n' "$(cat $OUT/${ci}-ctest.log)"
-    gg_printf '```\n'
-}
-
 # test_llama_archs_tensor_split
 
 function gg_run_test_llama_archs_tensor_split {
@@ -324,14 +294,23 @@ function gg_run_test_llama_archs_tensor_split {
     set +e
 }
 
-function gg_sum_test_llama_archs_tensor_split {
-    gg_printf '### %s\n\n' "${ci}"
+# test_llama_archs_models
 
-    gg_printf 'Runs test-llama-archs with 1 to 4 devices\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '```\n'
-    gg_printf '%s\n' "$(cat $OUT/${ci}.log)"
-    gg_printf '```\n'
+function gg_run_test_llama_archs_models {
+    cd ${SRC}
+
+    set -e
+
+    # TODO: fix and re-enable `test-llama-archs` on OpenVINO
+    # TODO: the `test-llama-archs` currently does not build on Windows, so we check if the binary exists
+    if [ -z ${GG_BUILD_OPENVINO} ] && [ -f ./build-ci-release/bin/test-llama-archs ]; then
+        rm -rf build-ci-models && mkdir -p build-ci-models
+
+        # generate the dummy models used by the model-dependent tests
+        ./build-ci-release/bin/test-llama-archs -o build-ci-models 2>&1
+    fi
+
+    set +e
 }
 
 # test_scripts
@@ -345,17 +324,6 @@ function gg_run_test_scripts {
     (cd ./tools/quantize   && time bash tests.sh "$SRC/build-ci-release/bin" "$MNT/models") 2>&1 | tee -a $OUT/${ci}-scripts.log
 
     set +e
-}
-
-function gg_sum_test_scripts {
-    gg_printf '### %s\n\n' "${ci}"
-
-    gg_printf 'Runs test scripts\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '```\n'
-    gg_printf '%s\n' "$(cat $OUT/${ci}-scripts.log)"
-    gg_printf '```\n'
-    gg_printf '\n'
 }
 
 function gg_get_model {
@@ -401,26 +369,6 @@ function gg_run_ctest_with_model_release {
     cd ..
 }
 
-function gg_sum_ctest_with_model_debug {
-    gg_printf '### %s\n\n' "${ci}"
-
-    gg_printf 'Runs ctest with model files in debug mode\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '```\n'
-    gg_printf '%s\n' "$(cat $OUT/${ci}-ctest.log)"
-    gg_printf '```\n'
-}
-
-function gg_sum_ctest_with_model_release {
-    gg_printf '### %s\n\n' "${ci}"
-
-    gg_printf 'Runs ctest with model files in release mode\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '```\n'
-    gg_printf '%s\n' "$(cat $OUT/${ci}-ctest.log)"
-    gg_printf '```\n'
-}
-
 # qwen3_0_6b
 
 function gg_run_qwen3_0_6b {
@@ -442,6 +390,7 @@ function gg_run_qwen3_0_6b {
     rm -rf build-ci-release && mkdir build-ci-release && cd build-ci-release
 
     set -e
+    set -o pipefail
 
     (cmake -G "${CMAKE_GENERATOR}" -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time cmake --build . --config Release -j$(nproc)) 2>&1 | tee -a $OUT/${ci}-make.log
@@ -490,6 +439,60 @@ function gg_run_qwen3_0_6b {
     (time ./bin/llama-completion -no-cnv --model ${model_q5_k} -ngl 99 -c 1024 -s 1234 -n 64 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q5_k.log
     (time ./bin/llama-completion -no-cnv --model ${model_q6_k} -ngl 99 -c 1024 -s 1234 -n 64 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q6_k.log
 
+    if [ ! -z ${GG_BUILD_CUDA} ]; then
+        cpu_log=$OUT/${ci}-tg-f16-cpu.log
+        gpu_log=$OUT/${ci}-tg-f16-gpu.log
+
+        set +x
+        (time ./bin/llama-completion -no-cnv --device none --model ${model_f16} -ngl 0 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${cpu_log} 2>/dev/null
+        (time ./bin/llama-completion -no-cnv --model ${model_f16} -ngl 99 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${gpu_log} 2>/dev/null
+        set -x
+
+        rc=0
+        python3 - "$cpu_log" "$gpu_log" << 'PY' || rc=$?
+import re, sys
+skip = re.compile(
+    r"^(\+|llama_|ggml|system_info|main:|real\t|user\t|sys\t|print_info|"
+    r"load_|common_|sampler|build:|\s*$)",
+    re.I,
+)
+
+def extract(path):
+    parts = []
+    with open(path, errors="replace") as f:
+        for line in f:
+            if skip.search(line):
+                continue
+            parts.append(line)
+    return "".join(parts).strip()
+
+cpu = extract(sys.argv[1])
+gpu = extract(sys.argv[2])
+if not cpu or not gpu:
+    print("CPU:", cpu)
+    print("GPU:", gpu)
+    sys.exit(20)
+if cpu != gpu:
+    print("CPU:", cpu)
+    print("GPU:", gpu)
+    sys.exit(22)
+sys.exit(0)
+PY
+        if [ $rc -eq 20 ]; then
+            printf '  - f16 cpu vs ngl99 (FAIL: empty generation)\n'
+            return 20
+        fi
+        if [ $rc -eq 22 ]; then
+            printf '  - f16 cpu vs ngl99 (FAIL: tokens differ)\n'
+            return 22
+        fi
+        if [ $rc -ne 0 ]; then
+            printf '  - f16 cpu vs ngl99 (FAIL: unknown error, check log)\n'
+            return $rc
+        fi
+        printf '  - f16 cpu vs ngl99 tokens OK\n'
+    fi
+
     (time ./bin/llama-perplexity --model ${model_f16}  -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-f16.log
     if [ -z ${GG_BUILD_NO_BF16} ]; then
         (time ./bin/llama-perplexity --model ${model_bf16} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-bf16.log
@@ -513,60 +516,72 @@ function gg_run_qwen3_0_6b {
     (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 99 -c 1024 -fa on                 ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
 
     function check_ppl {
-        qnt="$1"
-        ppl=$(echo "$2" | grep -oE "[0-9]+\.[0-9]+" | tail -n 1)
+        model="$1"
+        qnt="$2"
+        line="$3"
+        baseline_file="${SRC}/ci/ppl-baselines.json"
 
-        if [ $(echo "$ppl > 20.0" | bc) -eq 1 ]; then
-            printf '  - %s @ %s (FAIL: ppl > 20.0)\n' "$qnt" "$ppl"
+        ppl=$(echo "$line" | grep -oE "[0-9]+\.[0-9]+" | tail -n 1) || true
+        if [ -z "$ppl" ]; then
+            printf '  - %s @ MISSING (FAIL: no [1] ppl line)\n' "$qnt"
             return 20
+        fi
+
+        rc=0
+        py_out=$(python3 - "$baseline_file" "$model" "$qnt" "$ppl" << 'PY'
+import json, sys
+path, model, qnt, ppl_s = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+with open(path) as f:
+    cfg = json.load(f)
+rel_tol = float(cfg["rel_tol"])
+models = cfg["models"]
+if model not in models or qnt not in models[model]:
+    sys.exit(21)
+base = float(models[model][qnt])
+ppl = float(ppl_s)
+drift = abs(ppl - base) / base
+if drift > rel_tol:
+    print("%.6f %.6f" % (base, drift))
+    sys.exit(22)
+sys.exit(0)
+PY
+) || rc=$?
+        if [ $rc -eq 21 ]; then
+            printf '  - %s @ %s (FAIL: no baseline in json)\n' "$qnt" "$ppl"
+            return 21
+        fi
+        if [ $rc -eq 22 ]; then
+            base=$(echo "$py_out" | awk '{print $1}')
+            drift=$(echo "$py_out" | awk '{print $2}')
+            printf '  - %s @ %s (FAIL: drift vs baseline, drift %s from baseline %s)\n' "$qnt" "$ppl" "$drift" "$base"
+            return 22
+        fi
+        if [ $rc -ne 0 ]; then
+            printf '  - %s @ %s (FAIL: unknown error, check log)\n' "$qnt" "$ppl"
+            return $rc
         fi
 
         printf '  - %s @ %s OK\n' "$qnt" "$ppl"
         return 0
     }
 
-    check_ppl "f16"  "$(cat $OUT/${ci}-tg-f16.log  | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
+    check_ppl "qwen3-0.6b" "f16"  "$(grep "^\[1\]" $OUT/${ci}-tg-f16.log || true)"
     if [ -z ${GG_BUILD_NO_BF16} ]; then
-        check_ppl "bf16" "$(cat $OUT/${ci}-tg-bf16.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
+        check_ppl "qwen3-0.6b" "bf16" "$(grep "^\[1\]" $OUT/${ci}-tg-bf16.log || true)"
     fi
-    check_ppl "q8_0" "$(cat $OUT/${ci}-tg-q8_0.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "q4_0" "$(cat $OUT/${ci}-tg-q4_0.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "q4_1" "$(cat $OUT/${ci}-tg-q4_1.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "q5_0" "$(cat $OUT/${ci}-tg-q5_0.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "q5_1" "$(cat $OUT/${ci}-tg-q5_1.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
-   #check_ppl "q2_k" "$(cat $OUT/${ci}-tg-q2_k.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log # note: ppl > 20.0 for this quant and model
-    check_ppl "q3_k" "$(cat $OUT/${ci}-tg-q3_k.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "q4_k" "$(cat $OUT/${ci}-tg-q4_k.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "q5_k" "$(cat $OUT/${ci}-tg-q5_k.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "q6_k" "$(cat $OUT/${ci}-tg-q6_k.log | grep "^\[1\]")" | tee -a $OUT/${ci}-ppl.log
+    check_ppl "qwen3-0.6b" "q8_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q8_0.log || true)"
+    check_ppl "qwen3-0.6b" "q4_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_0.log || true)"
+    check_ppl "qwen3-0.6b" "q4_1" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_1.log || true)"
+    check_ppl "qwen3-0.6b" "q5_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_0.log || true)"
+    check_ppl "qwen3-0.6b" "q5_1" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_1.log || true)"
+    #check_ppl "qwen3-0.6b" "q2_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q2_k.log || true)"
+    check_ppl "qwen3-0.6b" "q3_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q3_k.log || true)"
+    check_ppl "qwen3-0.6b" "q4_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_k.log || true)"
+    check_ppl "qwen3-0.6b" "q5_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_k.log || true)"
+    check_ppl "qwen3-0.6b" "q6_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q6_k.log || true)"
 
-    cat $OUT/${ci}-imatrix.log | grep "Final" >> $OUT/${ci}-imatrix-sum.log
-
+    set +o pipefail
     set +e
-}
-
-function gg_sum_qwen3_0_6b {
-    gg_printf '### %s\n\n' "${ci}"
-
-    gg_printf 'Qwen3 0.6B:\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '- perplexity:\n%s\n' "$(cat $OUT/${ci}-ppl.log)"
-    gg_printf '- imatrix:\n```\n%s\n```\n' "$(cat $OUT/${ci}-imatrix-sum.log)"
-    gg_printf '- f16:\n```\n%s\n```\n'  "$(cat $OUT/${ci}-tg-f16.log)"
-    if [ -z ${GG_BUILD_NO_BF16} ]; then
-        gg_printf '- bf16:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-bf16.log)"
-    fi
-    gg_printf '- q8_0:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q8_0.log)"
-    gg_printf '- q4_0:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q4_0.log)"
-    gg_printf '- q4_1:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q4_1.log)"
-    gg_printf '- q5_0:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q5_0.log)"
-    gg_printf '- q5_1:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q5_1.log)"
-    gg_printf '- q2_k:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q2_k.log)"
-    gg_printf '- q3_k:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q3_k.log)"
-    gg_printf '- q4_k:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q4_k.log)"
-    gg_printf '- q5_k:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q5_k.log)"
-    gg_printf '- q6_k:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q6_k.log)"
-    gg_printf '- save-load-state: \n```\n%s\n```\n' "$(cat $OUT/${ci}-save-load-state.log)"
 }
 
 # bge-small
@@ -608,15 +623,6 @@ function gg_run_embd_bge_small {
     (time ./bin/llama-embedding --model ${model_q8_0} -p "I believe the meaning of life is" -ngl 99 -c 0 --no-op-offload) 2>&1 | tee -a $OUT/${ci}-tg-q8_0.log
 
     set +e
-}
-
-function gg_sum_embd_bge_small {
-    gg_printf '### %s\n\n' "${ci}"
-
-    gg_printf 'BGE Small (BERT):\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '- f16: \n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-f16.log)"
-    gg_printf '- q8_0:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q8_0.log)"
 }
 
 # rerank_tiny
@@ -675,91 +681,95 @@ function gg_run_rerank_tiny {
     set +e
 }
 
-function gg_sum_rerank_tiny {
-    gg_printf '### %s\n\n' "${ci}"
-
-    gg_printf 'Rerank Tiny (Jina):\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '- f16: \n```\n%s\n```\n' "$(cat $OUT/${ci}-rk-f16.log)"
-}
-
 function gg_check_build_requirements {
     if ! command -v git &> /dev/null; then
-        gg_printf 'git not found, please install\n'
+        echo 'git not found, please install'
         exit 1
     fi
 
     if ! command -v git-lfs &> /dev/null; then
-        gg_printf 'git-lfs not found, please install\n'
+        echo 'git-lfs not found, please install'
         exit 1
     fi
 
     if ! git config --get filter.lfs.clean &> /dev/null; then
-        gg_printf 'git-lfs not initialized, please run `git lfs install`\n'
+        echo 'git-lfs not initialized, please run `git lfs install`'
         exit 1
     fi
 
     if ! command -v wget &> /dev/null; then
-        gg_printf 'wget not found, please install\n'
+        echo 'wget not found, please install'
         exit 1
     fi
 
     if ! command -v python3 &> /dev/null; then
-        gg_printf 'python3 not found, please install\n'
+        echo 'python3 not found, please install'
         exit 1
     fi
 
     if ! command -v pip3 &> /dev/null; then
-        gg_printf 'pip3 not found, please install\n'
+        echo 'pip3 not found, please install'
         exit 1
     fi
 
     if ! python3 -m ensurepip --help &> /dev/null; then
-        gg_printf 'ensurepip not found, please install python3-venv package\n'
+        echo 'ensurepip not found, please install python3-venv package'
         exit 1
     fi
 
     if ! command -v cmake &> /dev/null; then
-        gg_printf 'cmake not found, please install\n'
+        echo 'cmake not found, please install'
         exit 1
     fi
 
     if ! command -v ccache &> /dev/null; then
-        gg_printf 'ccache not found, please consider installing for faster builds\n'
+        echo 'ccache not found, please consider installing for faster builds'
     fi
 
     if ! command -v ctest &> /dev/null; then
-        gg_printf 'ctest not found, please install\n'
+        echo 'ctest not found, please install'
         exit 1
     fi
 
     if ! command -v unzip &> /dev/null; then
-        gg_printf 'unzip not found, please install\n'
+        echo 'unzip not found, please install'
         exit 1
     fi
 }
 
-function gg_run_test_backend_ops_cpu {
+function gg_run_test_backend_ops {
     cd ${SRC}
 
     cd build-ci-release
 
     set -e
 
-    (time ./bin/test-backend-ops -b CPU ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops-cpu.log
+    local n_jobs=$(nproc)
+    if [ "${n_jobs}" -gt 2 ]; then
+        n_jobs=2
+    fi
+    local args_extra="-j ${n_jobs}"
+
+    # TODO: fix multi-threaded for ROCm
+    #       https://github.com/ggml-org/llama.cpp/actions/runs/34576278519/job/103297889044?pr=28740#step:3:4865
+    if [ ! -z ${GG_BUILD_ROCM} ]; then
+        args_extra=""
+    fi
+
+    # TODO: MoltenVK bug?
+    #       https://github.com/ggml-org/llama.cpp/actions/runs/34611260059/job/103302413736?pr=28740#step:3:5897
+    if [ ! -z "${GG_BUILD_VULKAN}" ] && [ "$(uname -s)" = "Darwin" ]; then
+        args_extra=""
+    fi
+
+    # TODO: reduce the test-backend-ops timeout to 1800s
+    if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
+        (time timeout 3600 ./bin/test-backend-ops ${args_extra} -b CPU) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+    else
+        (time timeout 3600 ./bin/test-backend-ops ${args_extra}       ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+    fi
 
     set +e
-}
-
-function gg_sum_test_backend_ops_cpu {
-    gg_printf '### %s\n\n' "${ci}"
-
-    gg_printf 'Runs test-backend-ops for CPU backend\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '```\n'
-    gg_printf '%s\n' "$(cat $OUT/${ci}-test-backend-ops-cpu.log)"
-    gg_printf '```\n'
-    gg_printf '\n'
 }
 
 ## main
@@ -790,11 +800,10 @@ ret=0
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
 
-test $ret -eq 0 && gg_run test_llama_archs_tensor_split
+test $ret -eq 0 && gg_run test_backend_ops
 
-if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
-    test $ret -eq 0 && gg_run test_backend_ops_cpu
-fi
+test $ret -eq 0 && gg_run test_llama_archs_models
+test $ret -eq 0 && gg_run test_llama_archs_tensor_split
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run embd_bge_small
@@ -809,7 +818,5 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run ctest_with_model_debug
     test $ret -eq 0 && gg_run ctest_with_model_release
 fi
-
-cat $OUT/README.md
 
 exit $ret

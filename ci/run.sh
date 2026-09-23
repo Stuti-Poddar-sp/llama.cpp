@@ -443,14 +443,16 @@ function gg_run_qwen3_0_6b {
         cpu_log=$OUT/${ci}-tg-f16-cpu.log
         gpu_log=$OUT/${ci}-tg-f16-gpu.log
 
+        set +x
         (time ./bin/llama-completion -no-cnv --log-disable --device none --model ${model_f16} -ngl 0 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${cpu_log} 2>&1
         (time ./bin/llama-completion -no-cnv --log-disable --model ${model_f16} -ngl 99 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${gpu_log} 2>&1
+        set -x
 
         rc=0
         python3 - "$cpu_log" "$gpu_log" << 'PY' || rc=$?
 import re, sys
 skip = re.compile(
-    r"^(llama_|ggml|system_info|main:|real\t|user\t|sys\t|print_info|"
+    r"^(\+|llama_|ggml|system_info|main:|real\t|user\t|sys\t|print_info|"
     r"load_|common_|sampler|build:|\s*$)",
     re.I,
 )

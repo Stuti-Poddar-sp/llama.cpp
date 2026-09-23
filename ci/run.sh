@@ -446,7 +446,8 @@ function gg_run_qwen3_0_6b {
         (time ./bin/llama-completion -no-cnv --log-disable --device none --model ${model_f16} -ngl 0 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${cpu_log} 2>&1
         (time ./bin/llama-completion -no-cnv --log-disable --model ${model_f16} -ngl 99 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${gpu_log} 2>&1
 
-        python3 - "$cpu_log" "$gpu_log" << 'PY'
+        rc=0
+        python3 - "$cpu_log" "$gpu_log" << 'PY' || rc=$?
 import re, sys
 skip = re.compile(
     r"^(llama_|ggml|system_info|main:|real\t|user\t|sys\t|print_info|"
@@ -466,12 +467,15 @@ def extract(path):
 cpu = extract(sys.argv[1])
 gpu = extract(sys.argv[2])
 if not cpu or not gpu:
+    print("CPU:", cpu)
+    print("GPU:", gpu)
     sys.exit(20)
 if cpu != gpu:
+    print("CPU:", cpu)
+    print("GPU:", gpu)
     sys.exit(22)
 sys.exit(0)
 PY
-        rc=$?
         if [ $rc -eq 20 ]; then
             printf '  - f16 cpu vs ngl99 (FAIL: empty generation)\n'
             return 20

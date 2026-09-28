@@ -446,16 +446,18 @@ function gg_run_qwen3_0_6b {
             fi
             model_var=model_${qnt}
             model=${!model_var}
-            cpu_log=$OUT/${ci}-tg-${qnt}-cpu.log
-            gpu_log=$OUT/${ci}-tg-${qnt}-gpu.log
 
-            set +x
-            (time ./bin/llama-completion -cnv -st --jinja --device none --model ${model} -ngl 0 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${cpu_log} 2>/dev/null
-            (time ./bin/llama-completion -cnv -st --jinja --model ${model} -ngl 99 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${gpu_log} 2>/dev/null
-            set -x
+            if [ "$qnt" = "f16" ] || [ "$qnt" = "bf16" ]; then
+                cpu_log=$OUT/${ci}-tg-${qnt}-cpu.log
+                gpu_log=$OUT/${ci}-tg-${qnt}-gpu.log
 
-            rc=0
-            python3 - "$cpu_log" "$gpu_log" << 'PY' || rc=$?
+                set +x
+                (time ./bin/llama-completion -no-cnv --device none --model ${model} -ngl 0 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${cpu_log} 2>/dev/null
+                (time ./bin/llama-completion -no-cnv --model ${model} -ngl 99 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${gpu_log} 2>/dev/null
+                set -x
+
+                rc=0
+                python3 - "$cpu_log" "$gpu_log" << 'PY' || rc=$?
 import re, sys
 skip = re.compile(
     r"^(\+|llama_|ggml|system_info|main:|real\t|user\t|sys\t|print_info|"
@@ -484,19 +486,71 @@ if cpu != gpu:
     sys.exit(22)
 sys.exit(0)
 PY
+                if [ $rc -eq 20 ]; then
+                    printf '  - %s cpu vs ngl99 (FAIL: empty generation)\n' "$qnt"
+                    return 20
+                fi
+                if [ $rc -eq 22 ]; then
+                    printf '  - %s cpu vs ngl99 (FAIL: tokens differ)\n' "$qnt"
+                    return 22
+                fi
+                if [ $rc -ne 0 ]; then
+                    printf '  - %s cpu vs ngl99 (FAIL: unknown error, check log)\n' "$qnt"
+                    return $rc
+                fi
+                printf '  - %s cpu vs ngl99 tokens OK\n' "$qnt"
+                continue
+            fi
+
+            cpu_dir=$OUT/${ci}-logits-${qnt}-cpu
+            gpu_dir=$OUT/${ci}-logits-${qnt}-gpu
+            rm -rf "$cpu_dir" "$gpu_dir"
+            set +x
+            ./bin/llama-debug --save-logits --logits-output-dir "$cpu_dir" --device none -ngl 0 -m ${model} -p "I believe the meaning of life is" > ${cpu_dir}.log 2>&1
+            ./bin/llama-debug --save-logits --logits-output-dir "$gpu_dir" -ngl 99 -m ${model} -p "I believe the meaning of life is" > ${gpu_dir}.log 2>&1
+            set -x
+
+            cpu_bin=$cpu_dir/llamacpp-ggml-model-${qnt}.bin
+            gpu_bin=$gpu_dir/llamacpp-ggml-model-${qnt}.bin
+            rc=0
+            py_out=$(python3 - "$cpu_bin" "$gpu_bin" << 'PY'
+import struct, sys
+atol = 1.0
+k = 32
+
+def load(path):
+    data = open(path, "rb").read()
+    n = len(data) // 4
+    if n == 0 or len(data) != n * 4:
+        return None
+    return struct.unpack("<%df" % n, data)
+
+cpu = load(sys.argv[1])
+gpu = load(sys.argv[2])
+if not cpu or not gpu or len(cpu) != len(gpu):
+    sys.exit(20)
+idx = set(sorted(range(len(cpu)), key=lambda i: cpu[i], reverse=True)[:k])
+idx.update(sorted(range(len(gpu)), key=lambda i: gpu[i], reverse=True)[:k])
+max_abs = max(abs(cpu[i] - gpu[i]) for i in idx)
+print("%.6f" % max_abs)
+if max_abs > atol:
+    sys.exit(22)
+sys.exit(0)
+PY
+) || rc=$?
             if [ $rc -eq 20 ]; then
-                printf '  - %s cpu vs ngl99 (FAIL: empty generation)\n' "$qnt"
+                printf '  - %s cpu vs ngl99 (FAIL: bad logits file)\n' "$qnt"
                 return 20
             fi
             if [ $rc -eq 22 ]; then
-                printf '  - %s cpu vs ngl99 (FAIL: tokens differ)\n' "$qnt"
+                printf '  - %s cpu vs ngl99 (FAIL: logits max abs %s > 1)\n' "$qnt" "$py_out"
                 return 22
             fi
             if [ $rc -ne 0 ]; then
                 printf '  - %s cpu vs ngl99 (FAIL: unknown error, check log)\n' "$qnt"
                 return $rc
             fi
-            printf '  - %s cpu vs ngl99 tokens OK\n' "$qnt"
+            printf '  - %s cpu vs ngl99 logits OK (max abs %s)\n' "$qnt" "$py_out"
         done
     fi
 

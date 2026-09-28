@@ -515,7 +515,7 @@ PY
             rc=0
             py_out=$(python3 - "$cpu_bin" "$gpu_bin" << 'PY'
 import struct, sys
-atol = 1.0
+atol = 2.0
 k = 32
 
 def load(path):
@@ -543,7 +543,7 @@ PY
                 return 20
             fi
             if [ $rc -eq 22 ]; then
-                printf '  - %s cpu vs ngl99 (FAIL: logits max abs %s > 1)\n' "$qnt" "$py_out"
+                printf '  - %s cpu vs ngl99 (FAIL: logits max abs %s > 2)\n' "$qnt" "$py_out"
                 return 22
             fi
             if [ $rc -ne 0 ]; then

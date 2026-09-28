@@ -440,16 +440,19 @@ function gg_run_qwen3_0_6b {
     (time ./bin/llama-completion -no-cnv --model ${model_q6_k} -ngl 99 -c 1024 -s 1234 -n 64 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q6_k.log
 
     if [ ! -z ${GG_BUILD_CUDA} ]; then
-        cpu_log=$OUT/${ci}-tg-f16-cpu.log
-        gpu_log=$OUT/${ci}-tg-f16-gpu.log
+        for qnt in f16 q4_0; do
+            model_var=model_${qnt}
+            model=${!model_var}
+            cpu_log=$OUT/${ci}-tg-${qnt}-cpu.log
+            gpu_log=$OUT/${ci}-tg-${qnt}-gpu.log
 
-        set +x
-        (time ./bin/llama-completion -no-cnv --device none --model ${model_f16} -ngl 0 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${cpu_log} 2>/dev/null
-        (time ./bin/llama-completion -no-cnv --model ${model_f16} -ngl 99 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${gpu_log} 2>/dev/null
-        set -x
+            set +x
+            (time ./bin/llama-completion -no-cnv --device none --model ${model} -ngl 0 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${cpu_log} 2>/dev/null
+            (time ./bin/llama-completion -no-cnv --model ${model} -ngl 99 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${gpu_log} 2>/dev/null
+            set -x
 
-        rc=0
-        python3 - "$cpu_log" "$gpu_log" << 'PY' || rc=$?
+            rc=0
+            python3 - "$cpu_log" "$gpu_log" << 'PY' || rc=$?
 import re, sys
 skip = re.compile(
     r"^(\+|llama_|ggml|system_info|main:|real\t|user\t|sys\t|print_info|"
@@ -478,19 +481,20 @@ if cpu != gpu:
     sys.exit(22)
 sys.exit(0)
 PY
-        if [ $rc -eq 20 ]; then
-            printf '  - f16 cpu vs ngl99 (FAIL: empty generation)\n'
-            return 20
-        fi
-        if [ $rc -eq 22 ]; then
-            printf '  - f16 cpu vs ngl99 (FAIL: tokens differ)\n'
-            return 22
-        fi
-        if [ $rc -ne 0 ]; then
-            printf '  - f16 cpu vs ngl99 (FAIL: unknown error, check log)\n'
-            return $rc
-        fi
-        printf '  - f16 cpu vs ngl99 tokens OK\n'
+            if [ $rc -eq 20 ]; then
+                printf '  - %s cpu vs ngl99 (FAIL: empty generation)\n' "$qnt"
+                return 20
+            fi
+            if [ $rc -eq 22 ]; then
+                printf '  - %s cpu vs ngl99 (FAIL: tokens differ)\n' "$qnt"
+                return 22
+            fi
+            if [ $rc -ne 0 ]; then
+                printf '  - %s cpu vs ngl99 (FAIL: unknown error, check log)\n' "$qnt"
+                return $rc
+            fi
+            printf '  - %s cpu vs ngl99 tokens OK\n' "$qnt"
+        done
     fi
 
     (time ./bin/llama-perplexity --model ${model_f16}  -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-f16.log

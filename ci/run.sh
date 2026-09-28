@@ -440,7 +440,7 @@ function gg_run_qwen3_0_6b {
     (time ./bin/llama-completion -no-cnv --model ${model_q6_k} -ngl 99 -c 1024 -s 1234 -n 64 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q6_k.log
 
     if [ ! -z ${GG_BUILD_CUDA} ]; then
-        for qnt in f16 bf16 q8_0 q4_1 q5_1 q3_k q4_k q5_k q6_k q2_k q5_0 q4_0; do
+        for qnt in f16 bf16 q8_0 q4_1 q5_1 q4_k q5_k q6_k q3_k q2_k q5_0 q4_0; do
             if [ "$qnt" = "bf16" ] && [ ! -z ${GG_BUILD_NO_BF16} ]; then
                 continue
             fi

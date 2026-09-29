@@ -440,6 +440,7 @@ function gg_run_qwen3_0_6b {
     (time ./bin/llama-completion -no-cnv --model ${model_q6_k} -ngl 99 -c 1024 -s 1234 -n 64 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q6_k.log
 
     if [ ! -z ${GG_BUILD_CUDA} ]; then
+        logits_rc=0
         for qnt in f16 bf16 q8_0 q4_1 q5_1 q4_k q5_k q6_k q3_k q2_k q5_0 q4_0; do
             if [ "$qnt" = "bf16" ] && [ ! -z ${GG_BUILD_NO_BF16} ]; then
                 continue
@@ -514,26 +515,43 @@ PY
             gpu_bin=$gpu_dir/llamacpp-ggml-model-${qnt}.bin
             rc=0
             py_out=$(python3 - "$cpu_bin" "$gpu_bin" << 'PY'
-import struct, sys
-atol = 2.0
-k = 32
+import math, struct, sys
+kl_max = 0.05
+dp_max = 0.05
 
 def load(path):
     data = open(path, "rb").read()
     n = len(data) // 4
     if n == 0 or len(data) != n * 4:
         return None
-    return struct.unpack("<%df" % n, data)
+    return list(struct.unpack("<%df" % n, data))
+
+def softmax(logits):
+    m = max(logits)
+    exps = [math.exp(x - m) for x in logits]
+    s = sum(exps)
+    return [e / s for e in exps]
 
 cpu = load(sys.argv[1])
 gpu = load(sys.argv[2])
 if not cpu or not gpu or len(cpu) != len(gpu):
     sys.exit(20)
-idx = set(sorted(range(len(cpu)), key=lambda i: cpu[i], reverse=True)[:k])
-idx.update(sorted(range(len(gpu)), key=lambda i: gpu[i], reverse=True)[:k])
-max_abs = max(abs(cpu[i] - gpu[i]) for i in idx)
-print("%.6f" % max_abs)
-if max_abs > atol:
+if any(math.isnan(x) or math.isinf(x) for x in cpu + gpu):
+    sys.exit(20)
+p = softmax(cpu)
+q = softmax(gpu)
+kl = 0.0
+dp = 0.0
+eps = 1e-12
+for pi, qi in zip(p, q):
+    dp = max(dp, abs(pi - qi))
+    if pi > eps:
+        kl += pi * math.log(pi / max(qi, eps))
+top_cpu = max(range(len(cpu)), key=cpu.__getitem__)
+top_gpu = max(range(len(gpu)), key=gpu.__getitem__)
+same = 1 if top_cpu == top_gpu else 0
+print("kl=%.6f dp=%.6f same=%d" % (kl, dp, same))
+if kl > kl_max or dp > dp_max:
     sys.exit(22)
 sys.exit(0)
 PY
@@ -543,15 +561,19 @@ PY
                 return 20
             fi
             if [ $rc -eq 22 ]; then
-                printf '  - %s cpu vs ngl99 (FAIL: logits max abs %s > 2)\n' "$qnt" "$py_out"
-                return 22
+                printf '  - %s cpu vs ngl99 (FAIL: %s; limits kl 0.05 dp 0.05)\n' "$qnt" "$py_out"
+                logits_rc=22
+                continue
             fi
             if [ $rc -ne 0 ]; then
                 printf '  - %s cpu vs ngl99 (FAIL: unknown error, check log)\n' "$qnt"
                 return $rc
             fi
-            printf '  - %s cpu vs ngl99 logits OK (max abs %s)\n' "$qnt" "$py_out"
+            printf '  - %s cpu vs ngl99 probs OK (%s)\n' "$qnt" "$py_out"
         done
+        if [ $logits_rc -ne 0 ]; then
+            return $logits_rc
+        fi
     fi
 
     (time ./bin/llama-perplexity --model ${model_f16}  -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-f16.log

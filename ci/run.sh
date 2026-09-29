@@ -440,25 +440,22 @@ function gg_run_qwen3_0_6b {
     (time ./bin/llama-completion -no-cnv --model ${model_q6_k} -ngl 99 -c 1024 -s 1234 -n 64 --ignore-eos -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q6_k.log
 
     if [ ! -z ${GG_BUILD_CUDA} ]; then
-        logits_rc=0
         for qnt in f16 bf16 q8_0 q4_1 q5_1 q4_k q5_k q6_k q3_k q2_k q5_0 q4_0; do
             if [ "$qnt" = "bf16" ] && [ ! -z ${GG_BUILD_NO_BF16} ]; then
                 continue
             fi
             model_var=model_${qnt}
             model=${!model_var}
+            cpu_log=$OUT/${ci}-tg-${qnt}-cpu.log
+            gpu_log=$OUT/${ci}-tg-${qnt}-gpu.log
 
-            if [ "$qnt" = "f16" ] || [ "$qnt" = "bf16" ]; then
-                cpu_log=$OUT/${ci}-tg-${qnt}-cpu.log
-                gpu_log=$OUT/${ci}-tg-${qnt}-gpu.log
+            set +x
+            (time ./bin/llama-completion -no-cnv --device none --model ${model} -ngl 0 -c 1024 -s 1234 --temp 0 -p "I believe the meaning of life is" ) > ${cpu_log} 2>/dev/null
+            (time ./bin/llama-completion -no-cnv --model ${model} -ngl 99 -c 1024 -s 1234 --temp 0 -p "I believe the meaning of life is" ) > ${gpu_log} 2>/dev/null
+            set -x
 
-                set +x
-                (time ./bin/llama-completion -no-cnv --device none --model ${model} -ngl 0 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${cpu_log} 2>/dev/null
-                (time ./bin/llama-completion -no-cnv --model ${model} -ngl 99 -c 1024 -s 1234 -n 64 --temp 0 --ignore-eos -p "I believe the meaning of life is" ) > ${gpu_log} 2>/dev/null
-                set -x
-
-                rc=0
-                python3 - "$cpu_log" "$gpu_log" << 'PY' || rc=$?
+            rc=0
+            python3 - "$cpu_log" "$gpu_log" << 'PY' || rc=$?
 import re, sys
 skip = re.compile(
     r"^(\+|llama_|ggml|system_info|main:|real\t|user\t|sys\t|print_info|"
@@ -487,93 +484,20 @@ if cpu != gpu:
     sys.exit(22)
 sys.exit(0)
 PY
-                if [ $rc -eq 20 ]; then
-                    printf '  - %s cpu vs ngl99 (FAIL: empty generation)\n' "$qnt"
-                    return 20
-                fi
-                if [ $rc -eq 22 ]; then
-                    printf '  - %s cpu vs ngl99 (FAIL: tokens differ)\n' "$qnt"
-                    return 22
-                fi
-                if [ $rc -ne 0 ]; then
-                    printf '  - %s cpu vs ngl99 (FAIL: unknown error, check log)\n' "$qnt"
-                    return $rc
-                fi
-                printf '  - %s cpu vs ngl99 tokens OK\n' "$qnt"
-                continue
-            fi
-
-            cpu_dir=$OUT/${ci}-logits-${qnt}-cpu
-            gpu_dir=$OUT/${ci}-logits-${qnt}-gpu
-            rm -rf "$cpu_dir" "$gpu_dir"
-            set +x
-            ./bin/llama-debug --save-logits --logits-output-dir "$cpu_dir" --device none -ngl 0 -m ${model} -p "I believe the meaning of life is" > ${cpu_dir}.log 2>&1
-            ./bin/llama-debug --save-logits --logits-output-dir "$gpu_dir" -ngl 99 -m ${model} -p "I believe the meaning of life is" > ${gpu_dir}.log 2>&1
-            set -x
-
-            cpu_bin=$cpu_dir/llamacpp-ggml-model-${qnt}.bin
-            gpu_bin=$gpu_dir/llamacpp-ggml-model-${qnt}.bin
-            rc=0
-            py_out=$(python3 - "$cpu_bin" "$gpu_bin" << 'PY'
-import math, struct, sys
-kl_max = 0.05
-dp_max = 0.05
-
-def load(path):
-    data = open(path, "rb").read()
-    n = len(data) // 4
-    if n == 0 or len(data) != n * 4:
-        return None
-    return list(struct.unpack("<%df" % n, data))
-
-def softmax(logits):
-    m = max(logits)
-    exps = [math.exp(x - m) for x in logits]
-    s = sum(exps)
-    return [e / s for e in exps]
-
-cpu = load(sys.argv[1])
-gpu = load(sys.argv[2])
-if not cpu or not gpu or len(cpu) != len(gpu):
-    sys.exit(20)
-if any(math.isnan(x) or math.isinf(x) for x in cpu + gpu):
-    sys.exit(20)
-p = softmax(cpu)
-q = softmax(gpu)
-kl = 0.0
-dp = 0.0
-eps = 1e-12
-for pi, qi in zip(p, q):
-    dp = max(dp, abs(pi - qi))
-    if pi > eps:
-        kl += pi * math.log(pi / max(qi, eps))
-top_cpu = max(range(len(cpu)), key=cpu.__getitem__)
-top_gpu = max(range(len(gpu)), key=gpu.__getitem__)
-same = 1 if top_cpu == top_gpu else 0
-print("kl=%.6f dp=%.6f same=%d" % (kl, dp, same))
-if kl > kl_max or dp > dp_max:
-    sys.exit(22)
-sys.exit(0)
-PY
-) || rc=$?
             if [ $rc -eq 20 ]; then
-                printf '  - %s cpu vs ngl99 (FAIL: bad logits file)\n' "$qnt"
+                printf '  - %s cpu vs ngl99 (FAIL: empty generation)\n' "$qnt"
                 return 20
             fi
             if [ $rc -eq 22 ]; then
-                printf '  - %s cpu vs ngl99 (FAIL: %s; limits kl 0.05 dp 0.05)\n' "$qnt" "$py_out"
-                logits_rc=22
-                continue
+                printf '  - %s cpu vs ngl99 (FAIL: tokens differ)\n' "$qnt"
+                return 22
             fi
             if [ $rc -ne 0 ]; then
                 printf '  - %s cpu vs ngl99 (FAIL: unknown error, check log)\n' "$qnt"
                 return $rc
             fi
-            printf '  - %s cpu vs ngl99 probs OK (%s)\n' "$qnt" "$py_out"
+            printf '  - %s cpu vs ngl99 tokens OK\n' "$qnt"
         done
-        if [ $logits_rc -ne 0 ]; then
-            return $logits_rc
-        fi
     fi
 
     (time ./bin/llama-perplexity --model ${model_f16}  -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-tg-f16.log

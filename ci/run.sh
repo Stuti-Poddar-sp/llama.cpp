@@ -450,8 +450,8 @@ function gg_run_qwen3_0_6b {
             gpu_log=$OUT/${ci}-tg-${qnt}-gpu.log
 
             set +x
-            (time ./bin/llama-completion -no-cnv --device none --model ${model} -ngl 0 -c 1024 -s 1234 --temp 0 -p "I believe the meaning of life is" ) > ${cpu_log} 2>/dev/null
-            (time ./bin/llama-completion -no-cnv --model ${model} -ngl 99 -c 1024 -s 1234 --temp 0 -p "I believe the meaning of life is" ) > ${gpu_log} 2>/dev/null
+            (time ./bin/llama-completion -cnv -st --device none --model ${model} -ngl 0 -c 1024 -s 1234 --temp 0 -p "I believe the meaning of life is" ) > ${cpu_log} 2>/dev/null
+            (time ./bin/llama-completion -cnv -st --model ${model} -ngl 99 -c 1024 -s 1234 --temp 0 -p "I believe the meaning of life is" ) > ${gpu_log} 2>/dev/null
             set -x
 
             rc=0
